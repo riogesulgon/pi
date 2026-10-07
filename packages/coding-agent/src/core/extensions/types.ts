@@ -80,6 +80,7 @@ import type {
 import type { Settings } from "../settings-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
+import type { StartupBenchmarkRun } from "../startup-benchmark.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditToolDetails } from "../tools/edit.ts";
@@ -362,6 +363,11 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/**
+	 * Return the optional observational startup benchmark snapshot.
+	 * This does not mutate benchmark state or affect extension execution.
+	 */
+	getStartupBenchmark?(): StartupBenchmarkRun | undefined;
 }
 
 /** Options for {@link ExtensionToolContext.executeTool}. */
