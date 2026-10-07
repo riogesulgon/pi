@@ -38,6 +38,7 @@ import {
 	isSyntheticPath,
 	type SourceInfo,
 } from "./source-info.ts";
+import { finishStartupBenchmarkRun, startStartupBenchmarkRun } from "./startup-benchmark.ts";
 import { resetTimings } from "./timings.ts";
 
 export interface ResourceExtensionPaths {
@@ -507,6 +508,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
+		startStartupBenchmarkRun(this.loaded ? "reload" : "startup", process.env.PI_MODE ?? "unknown");
+		try {
 		resetTimings("extensions");
 
 		if (this.loaded) {
@@ -671,6 +674,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 			.filter((source) => existsSync(source))
 			.map((source) => resolvePath(source));
 		this.loaded = true;
+		} finally {
+			finishStartupBenchmarkRun();
+		}
 	}
 
 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {

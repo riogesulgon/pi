@@ -17,11 +17,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
-import {
-	finishStartupBenchmarkRun,
-	getStartupBenchmarkRun,
-	startStartupBenchmarkRun,
-} from "../src/core/startup-benchmark.ts";
+import { getStartupBenchmarkRun } from "../src/core/startup-benchmark.ts";
 
 import { createModelRegistry } from "./model-runtime-test-utils.ts";
 
@@ -63,10 +59,9 @@ describe("DefaultResourceLoader", () => {
 			writeFileSync(timedSkillPath, "---\nname: timed-skill\ndescription: Timed skill\n---\nContent\n");
 			writeFileSync(invalidSkillPath, "---\ndescription: Broken: unquoted colon\n---\nContent\n");
 
-			startStartupBenchmarkRun("reload", "test");
 			const loader = new DefaultResourceLoader({ cwd, agentDir, noPromptTemplates: true, noThemes: true });
 			await loader.reload();
-			const run = finishStartupBenchmarkRun();
+			const run = getStartupBenchmarkRun();
 
 			expect(run?.resources).toEqual(
 				expect.arrayContaining([
@@ -106,6 +101,19 @@ describe("DefaultResourceLoader", () => {
 				expect.arrayContaining([expect.objectContaining({ path: invalidSkillPath, type: "warning" })]),
 			);
 			expect(getStartupBenchmarkRun()).toBe(run);
+		});
+
+		it("labels the first reload as startup and later reloads as reload", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noPromptTemplates: true, noThemes: true });
+
+			await loader.reload();
+			const first = getStartupBenchmarkRun();
+			await loader.reload();
+			const second = getStartupBenchmarkRun();
+
+			expect(first?.trigger).toBe("startup");
+			expect(second?.trigger).toBe("reload");
+			expect(second?.runId).not.toBe(first?.runId);
 		});
 
 		it("should initialize with empty results before reload", () => {

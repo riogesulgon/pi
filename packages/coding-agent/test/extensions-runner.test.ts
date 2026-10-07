@@ -6,7 +6,14 @@ import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const previousStartupBenchmarkEnv = vi.hoisted(() => {
+	const previous = process.env.PI_STARTUP_BENCHMARK;
+	process.env.PI_STARTUP_BENCHMARK = "1";
+	return previous;
+});
+
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { createEventBus } from "../src/core/event-bus.ts";
 import {
@@ -27,6 +34,11 @@ import { KeybindingsManager, type KeyId } from "../src/core/keybindings.ts";
 import type { ModelRegistry } from "../src/core/model-registry.ts";
 import type { ScopedModel } from "../src/core/model-resolver.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import {
+	finishStartupBenchmarkRun,
+	measureStartupResource,
+	startStartupBenchmarkRun,
+} from "../src/core/startup-benchmark.ts";
 import { buildSystemPrompt } from "../src/core/system-prompt.ts";
 
 describe("ExtensionRunner", () => {
@@ -46,6 +58,11 @@ describe("ExtensionRunner", () => {
 
 	afterEach(() => {
 		fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	afterAll(() => {
+		if (previousStartupBenchmarkEnv === undefined) delete process.env.PI_STARTUP_BENCHMARK;
+		else process.env.PI_STARTUP_BENCHMARK = previousStartupBenchmarkEnv;
 	});
 
 	const providerModelConfig: ProviderConfig = {
@@ -110,6 +127,26 @@ describe("ExtensionRunner", () => {
 		getSystemPrompt: () => "",
 		getScopedModels: () => [],
 	};
+
+	describe("startup benchmark context", () => {
+		it("returns an immutable completed benchmark snapshot", async () => {
+			startStartupBenchmarkRun("startup", "test");
+			await measureStartupResource(
+				{ kind: "extension", phase: "factory", path: "test-extension", name: "test-extension" },
+				async () => {},
+			);
+			const completed = finishStartupBenchmarkRun();
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const context = runner.createContext();
+			const commandContext = runner.createCommandContext();
+
+			expect(context.getStartupBenchmark()).toBe(completed);
+			expect(commandContext.getStartupBenchmark()).toBe(completed);
+			expect(() => Object.assign(context.getStartupBenchmark()!.resources[0], { name: "changed" })).toThrow();
+			expect(context.getStartupBenchmark()).toBe(completed);
+		});
+	});
 
 	describe("scopedModels", () => {
 		it("reflects the getScopedModels context action on ctx.scopedModels", async () => {
