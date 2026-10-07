@@ -368,6 +368,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private lastPromptPaths: string[];
 	private lastThemePaths: string[];
 	private loaded: boolean;
+	private loadAttempted: boolean;
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
@@ -421,6 +422,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.lastPromptPaths = [];
 		this.lastThemePaths = [];
 		this.loaded = false;
+		this.loadAttempted = false;
 	}
 
 	getExtensions(): LoadExtensionsResult {
@@ -508,7 +510,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
-		startStartupBenchmarkRun(this.loaded ? "reload" : "startup", process.env.PI_MODE ?? "unknown");
+		const trigger = this.loadAttempted ? "reload" : "startup";
+		this.loadAttempted = true;
+		startStartupBenchmarkRun(trigger, process.env.PI_MODE ?? "unknown");
 		try {
 		resetTimings("extensions");
 

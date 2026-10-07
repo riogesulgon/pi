@@ -42,6 +42,15 @@ describe("startup benchmark", () => {
 		expect(benchmark.finish()!.resources[0]).toEqual(expect.objectContaining({ status: "error", error: "broken" }));
 	});
 
+	it("does not expose a previous snapshot while a new run is active", () => {
+		const benchmark = createStartupBenchmark({ enabled: true, now: () => 10 });
+		benchmark.start({ trigger: "startup", mode: "tui" });
+		const startup = benchmark.finish()!;
+		benchmark.start({ trigger: "reload", mode: "tui" });
+		expect(benchmark.getRun()).toBeUndefined();
+		expect(benchmark.finish()).not.toBe(startup);
+	});
+
 	it("returns immutable completed snapshots and keeps startup and reload runs distinct", () => {
 		const benchmark = createStartupBenchmark({ enabled: true, now: () => 10 });
 		benchmark.start({ trigger: "startup", mode: "tui" });

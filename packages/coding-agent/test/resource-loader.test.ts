@@ -116,6 +116,29 @@ describe("DefaultResourceLoader", () => {
 			expect(second?.runId).not.toBe(first?.runId);
 		});
 
+		it("labels a reload after a failed first load as reload", async () => {
+			let attempts = 0;
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				noPromptTemplates: true,
+				noThemes: true,
+				extensionsOverride: (base) => {
+					if (attempts++ === 0) throw new Error("first load failed");
+					return base;
+				},
+			});
+
+			await expect(loader.reload()).rejects.toThrow("first load failed");
+			const first = getStartupBenchmarkRun();
+			await loader.reload();
+			const second = getStartupBenchmarkRun();
+
+			expect(first?.trigger).toBe("startup");
+			expect(second?.trigger).toBe("reload");
+			expect(second?.runId).not.toBe(first?.runId);
+		});
+
 		it("should initialize with empty results before reload", () => {
 			const loader = new DefaultResourceLoader({ cwd, agentDir });
 

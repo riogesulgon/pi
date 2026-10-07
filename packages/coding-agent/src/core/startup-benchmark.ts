@@ -67,6 +67,7 @@ export function createStartupBenchmark(options: { enabled: boolean; now?: () => 
 	return {
 		start(input) {
 			if (!options.enabled) return;
+			completed = undefined;
 			const startedAt = new Date().toISOString();
 			const startedTimestamp = clock.now();
 			active = {
@@ -142,7 +143,7 @@ export function createStartupBenchmark(options: { enabled: boolean; now?: () => 
 			return snapshot;
 		},
 		getRun() {
-			return completed;
+			return active === undefined ? completed : undefined;
 		},
 	};
 }
