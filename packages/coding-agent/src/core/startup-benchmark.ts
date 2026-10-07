@@ -67,6 +67,7 @@ export function createStartupBenchmark(options: { enabled: boolean; now?: () => 
 		start(input) {
 			if (!options.enabled) return;
 			const startedAt = new Date().toISOString();
+			const startedTimestamp = clock.now();
 			active = {
 				run: {
 					version: 1,
@@ -77,25 +78,25 @@ export function createStartupBenchmark(options: { enabled: boolean; now?: () => 
 					totalMs: 0,
 					resources: [],
 				},
-				lastTimestamp: 0,
-				startedTimestamp: 0,
+				lastTimestamp: startedTimestamp,
+				startedTimestamp,
 				resources: [],
 			};
 		},
 		async measure(input, operation) {
 			if (!options.enabled || active === undefined) return await operation();
+			const run = active;
 			const started = clock.now();
-			if (active.resources.length === 0) active.startedTimestamp = started;
 			try {
 				const result = await operation();
 				const ended = clock.now();
-				active.lastTimestamp = ended;
-				active.resources.push({ ...input, durationMs: Math.max(0, ended - started), status: "ok" });
+				run.lastTimestamp = ended;
+				run.resources.push({ ...input, durationMs: Math.max(0, ended - started), status: "ok" });
 				return result;
 			} catch (error) {
 				const ended = clock.now();
-				active.lastTimestamp = ended;
-				active.resources.push({
+				run.lastTimestamp = ended;
+				run.resources.push({
 					...input,
 					durationMs: Math.max(0, ended - started),
 					status: "error",
@@ -106,14 +107,16 @@ export function createStartupBenchmark(options: { enabled: boolean; now?: () => 
 		},
 		finish() {
 			if (!options.enabled || active === undefined) return undefined;
-			const run = freezeRun({
-				...active.run,
-				totalMs: Math.max(0, active.lastTimestamp - active.startedTimestamp),
-				resources: active.resources,
+			const run = active;
+			const finishedTimestamp = clock.now();
+			const snapshot = freezeRun({
+				...run.run,
+				totalMs: Math.max(0, finishedTimestamp - run.startedTimestamp),
+				resources: run.resources,
 			});
-			completed = run;
+			completed = snapshot;
 			active = undefined;
-			return run;
+			return snapshot;
 		},
 		getRun() {
 			return completed;

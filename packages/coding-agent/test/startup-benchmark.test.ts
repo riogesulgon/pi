@@ -11,7 +11,7 @@ describe("startup benchmark", () => {
 	});
 
 	it("records extension factory and skill parse rows with monotonic durations", async () => {
-		const times = [10, 18, 18, 31];
+		const times = [10, 10, 18, 18, 31, 31];
 		const benchmark = createStartupBenchmark({ enabled: true, now: () => times.shift()! });
 		benchmark.start({ trigger: "startup", mode: "tui" });
 		await benchmark.measure(
@@ -22,7 +22,9 @@ describe("startup benchmark", () => {
 			{ kind: "skill", phase: "parse", path: "/skill/SKILL.md", name: "skill" },
 			async () => undefined,
 		);
-		expect(benchmark.finish()!.resources).toEqual([
+		const run = benchmark.finish()!;
+		expect(run.totalMs).toBe(21);
+		expect(run.resources).toEqual([
 			expect.objectContaining({ kind: "extension", phase: "factory", durationMs: 8, status: "ok" }),
 			expect.objectContaining({ kind: "skill", phase: "parse", durationMs: 13, status: "ok" }),
 		]);
@@ -51,5 +53,12 @@ describe("startup benchmark", () => {
 		expect(startup).not.toBe(reload);
 		expect(Object.isFrozen(startup)).toBe(true);
 		expect(Object.isFrozen(startup.resources)).toBe(true);
+	});
+
+	it("measures an empty run from start through finish", () => {
+		const times = [100, 137];
+		const benchmark = createStartupBenchmark({ enabled: true, now: () => times.shift()! });
+		benchmark.start({ trigger: "startup", mode: "tui" });
+		expect(benchmark.finish()!.totalMs).toBe(37);
 	});
 });

@@ -367,7 +367,7 @@ export interface ExtensionContext {
 	 * Return the optional observational startup benchmark snapshot.
 	 * This does not mutate benchmark state or affect extension execution.
 	 */
-	getStartupBenchmark?(): StartupBenchmarkRun | undefined;
+	getStartupBenchmark(): StartupBenchmarkRun | undefined;
 }
 
 /** Options for {@link ExtensionToolContext.executeTool}. */

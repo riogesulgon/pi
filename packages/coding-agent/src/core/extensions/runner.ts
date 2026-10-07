@@ -18,6 +18,7 @@ import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type { SessionManager } from "../session-manager.ts";
+import { getStartupBenchmarkRun } from "../startup-benchmark.ts";
 import {
 	type BuildSystemPromptOptions,
 	buildSystemPrompt,
@@ -950,6 +951,10 @@ export class ExtensionRunner {
 			getSystemPrompt: () => {
 				runner.assertActive();
 				return runner.getSystemPromptFn();
+			},
+			getStartupBenchmark: () => {
+				runner.assertActive();
+				return getStartupBenchmarkRun();
 			},
 		};
 	}
