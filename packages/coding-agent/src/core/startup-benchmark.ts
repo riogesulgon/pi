@@ -32,6 +32,7 @@ export interface StartupResourceInput {
 export interface StartupBenchmark {
 	start(input: { trigger: StartupBenchmarkTrigger; mode: string }): void;
 	measure<T>(input: StartupResourceInput, operation: () => T | Promise<T>): Promise<T>;
+	measureSync<T>(input: StartupResourceInput, operation: () => T): T;
 	finish(): StartupBenchmarkRun | undefined;
 	getRun(): StartupBenchmarkRun | undefined;
 }
@@ -105,6 +106,28 @@ export function createStartupBenchmark(options: { enabled: boolean; now?: () => 
 				throw error;
 			}
 		},
+		measureSync(input, operation) {
+			if (!options.enabled || active === undefined) return operation();
+			const run = active;
+			const started = clock.now();
+			try {
+				const result = operation();
+				const ended = clock.now();
+				run.lastTimestamp = ended;
+				run.resources.push({ ...input, durationMs: Math.max(0, ended - started), status: "ok" });
+				return result;
+			} catch (error) {
+				const ended = clock.now();
+				run.lastTimestamp = ended;
+				run.resources.push({
+					...input,
+					durationMs: Math.max(0, ended - started),
+					status: "error",
+					error: errorMessage(error),
+				});
+				throw error;
+			}
+		},
 		finish() {
 			if (!options.enabled || active === undefined) return undefined;
 			const run = active;
@@ -135,6 +158,10 @@ export async function measureStartupResource<T>(
 	operation: () => T | Promise<T>,
 ): Promise<T> {
 	return await singleton.measure(input, operation);
+}
+
+export function measureStartupResourceSync<T>(input: StartupResourceInput, operation: () => T): T {
+	return singleton.measureSync(input, operation);
 }
 
 export function finishStartupBenchmarkRun(): StartupBenchmarkRun | undefined {

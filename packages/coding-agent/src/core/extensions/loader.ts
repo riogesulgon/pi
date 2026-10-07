@@ -18,6 +18,7 @@ import { execCommand } from "../exec.ts";
 import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServerConfig } from "../mcp-servers.ts";
 import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
+import { measureStartupResource } from "../startup-benchmark.ts";
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import type {
@@ -641,13 +642,19 @@ async function loadExtension(
 	const resolvedPath = resolvePath(extensionPath, cwd, { normalizeUnicodeSpaces: true });
 
 	try {
-		const factory = await loadExtensionModule(resolvedPath, cacheToken);
+		const factory = await measureStartupResource(
+			{ kind: "extension", phase: "module-import", path: resolvedPath, name: extensionPath },
+			() => loadExtensionModule(resolvedPath, cacheToken),
+		);
 		time(`${extensionPath} module import`, "extensions");
 		if (!factory) {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
 
-		const extension = await initializeExtension(factory, extensionPath, resolvedPath, cwd, eventBus, runtime);
+		const extension = await measureStartupResource(
+			{ kind: "extension", phase: "factory", path: resolvedPath, name: extensionPath },
+			() => initializeExtension(factory, extensionPath, resolvedPath, cwd, eventBus, runtime),
+		);
 
 		return { extension, error: null };
 	} catch (err) {
