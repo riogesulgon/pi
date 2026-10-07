@@ -293,17 +293,17 @@ function loadSkillFromFile(
 			const loaded = loadSkillFromFileUnmeasured(filePath, source);
 			result = loaded;
 			if (loaded.skill) measurement.name = loaded.skill.name;
-			const hasDeclaredError = loaded.diagnostics.some(
-				(diagnostic) => diagnostic.type === "error" || basename(filePath) === "SKILL.md",
-			);
-			if (hasDeclaredError && loaded.diagnostics.length > 0) {
+			// A rejected load (read/parse/validation with no skill) is an error. A
+			// loaded skill may still have warning-only metadata diagnostics.
+			if (!loaded.skill && loaded.diagnostics.length > 0) {
 				throw new Error(loaded.diagnostics[0].message);
 			}
 			return loaded;
 		});
-	} catch {
+	} catch (error) {
 		if (result) return result;
-		throw new Error("skill measurement failed");
+		// Instrumentation must not replace an unexpected loader failure.
+		throw error;
 	}
 }
 
