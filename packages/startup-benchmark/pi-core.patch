@@ -1,0 +1,826 @@
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 338d0e0..df4fa26 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -121,6 +121,7 @@ import {
+ import type { CacheWarmingMode, SettingsManager } from "./settings-manager.ts";
+ import type { SlashCommandInfo } from "./slash-commands.ts";
+ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
++import { finishStartupBenchmarkRun } from "./startup-benchmark.ts";
+ import {
+ 	buildSystemPrompt,
+ 	buildSystemPromptSections,
+@@ -2937,8 +2938,10 @@ export class AgentSession {
+ 		}
+ 
+ 		this._applyExtensionBindings(this._extensionRunner);
+-		await this._extensionRunner.emit(this._sessionStartEvent);
+ 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
++		await this._extensionRunner.emit(this._sessionStartEvent);
++		finishStartupBenchmarkRun();
++		await this._extensionRunner.emit({ type: "session_start_complete", reason: this._sessionStartEvent.reason });
+ 	}
+ 
+ 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
+@@ -3310,8 +3313,12 @@ export class AgentSession {
+ 			this._extensionErrorListener;
+ 		if (hasBindings) {
+ 			await options?.beforeSessionStart?.();
+-			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+ 			await this.extendResourcesFromExtensions("reload");
++			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
++			finishStartupBenchmarkRun();
++			await this._extensionRunner.emit({ type: "session_start_complete", reason: "reload" });
++		} else {
++			finishStartupBenchmarkRun();
+ 		}
+ 	}
+ 
+diff --git a/packages/coding-agent/src/core/extensions/loader.ts b/packages/coding-agent/src/core/extensions/loader.ts
+index ab7ec23..a9515c9 100644
+--- a/packages/coding-agent/src/core/extensions/loader.ts
++++ b/packages/coding-agent/src/core/extensions/loader.ts
+@@ -17,6 +17,7 @@ import type { ExecOptions } from "../exec.ts";
+ import { execCommand } from "../exec.ts";
+ import { readPiManifest } from "../pi-manifest.ts";
+ import { createSyntheticSourceInfo } from "../source-info.ts";
++import { measureStartupResource } from "../startup-benchmark.ts";
+ import { time } from "../timings.ts";
+ import type {
+ 	EntryRenderer,
+@@ -544,8 +545,13 @@ async function initializeExtension(
+ 	const extension = createExtension(extensionPath, resolvedPath);
+ 	const load = createExtensionAPI(extension, runtime, cwd, eventBus);
+ 	try {
+-		await factory(load.api);
+-		load.commit();
++		await measureStartupResource(
++			{ kind: "extension", phase: "factory", path: resolvedPath, name: extensionPath },
++			async () => {
++				await factory(load.api);
++				load.commit();
++			},
++		);
+ 	} catch (error) {
+ 		load.discard();
+ 		throw error;
+@@ -564,7 +570,10 @@ async function loadExtension(
+ 	const resolvedPath = resolvePath(extensionPath, cwd, { normalizeUnicodeSpaces: true });
+ 
+ 	try {
+-		const factory = await loadExtensionModule(resolvedPath, cacheToken);
++		const factory = await measureStartupResource(
++			{ kind: "extension", phase: "module-import", path: resolvedPath, name: extensionPath },
++			() => loadExtensionModule(resolvedPath, cacheToken),
++		);
+ 		time(`${extensionPath} module import`, "extensions");
+ 		if (!factory) {
+ 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
+diff --git a/packages/coding-agent/src/core/extensions/runner.ts b/packages/coding-agent/src/core/extensions/runner.ts
+index b0e99f8..07bf1c0 100644
+--- a/packages/coding-agent/src/core/extensions/runner.ts
++++ b/packages/coding-agent/src/core/extensions/runner.ts
+@@ -18,6 +18,7 @@ import type { KeybindingsConfig } from "../keybindings.ts";
+ import type { ModelRegistry } from "../model-registry.ts";
+ import type { ScopedModel } from "../model-resolver.ts";
+ import type { SessionManager } from "../session-manager.ts";
++import { getStartupBenchmarkRun } from "../startup-benchmark.ts";
+ import {
+ 	type BuildSystemPromptOptions,
+ 	buildSystemPrompt,
+@@ -883,6 +884,10 @@ export class ExtensionRunner {
+ 				runner.assertActive();
+ 				return runner.getSystemPromptFn();
+ 			},
++			getStartupBenchmark: () => {
++				runner.assertActive();
++				return getStartupBenchmarkRun();
++			},
+ 		};
+ 	}
+ 
+diff --git a/packages/coding-agent/src/core/extensions/types.ts b/packages/coding-agent/src/core/extensions/types.ts
+index 41bc4e6..58de5be 100644
+--- a/packages/coding-agent/src/core/extensions/types.ts
++++ b/packages/coding-agent/src/core/extensions/types.ts
+@@ -69,6 +69,7 @@ import type {
+ } from "../session-manager.ts";
+ import type { SlashCommandInfo } from "../slash-commands.ts";
+ import type { SourceInfo } from "../source-info.ts";
++import type { StartupBenchmarkRun } from "../startup-benchmark.ts";
+ import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
+ import type { BashOperations } from "../tools/bash.ts";
+ import type { EditToolDetails } from "../tools/edit.ts";
+@@ -350,6 +351,11 @@ export interface ExtensionContext {
+ 	compact(options?: CompactOptions): void;
+ 	/** Get the current effective system prompt. */
+ 	getSystemPrompt(): string;
++	/**
++	 * Return the optional observational startup benchmark snapshot.
++	 * This does not mutate benchmark state or affect extension execution.
++	 */
++	getStartupBenchmark(): StartupBenchmarkRun | undefined;
+ }
+ 
+ /**
+@@ -546,7 +552,7 @@ export type ProjectTrustHandler = (
+ 	ctx: ProjectTrustContext,
+ ) => Promise<ProjectTrustEventResult> | ProjectTrustEventResult;
+ 
+-/** Fired after session_start to allow extensions to provide additional resource paths. */
++/** Fired during startup/reload before session_start to allow extensions to provide additional resource paths. */
+ export interface ResourcesDiscoverEvent {
+ 	type: "resources_discover";
+ 	cwd: string;
+@@ -574,6 +580,12 @@ export interface SessionStartEvent {
+ }
+ 
+ /** Fired when the current session metadata changes. */
++export interface SessionStartCompleteEvent {
++	type: "session_start_complete";
++	reason: "startup" | "reload" | "new" | "resume" | "fork";
++}
++
++/** Fired after session_start handlers and extension-provided resources are finalized. */
+ export interface SessionInfoChangedEvent {
+ 	type: "session_info_changed";
+ 	/** Current normalized session name. Undefined when the name is cleared. */
+@@ -674,6 +686,7 @@ export interface SessionTreeEvent {
+ 
+ export type SessionEvent =
+ 	| SessionStartEvent
++	| SessionStartCompleteEvent
+ 	| SessionInfoChangedEvent
+ 	| SessionBeforeSwitchEvent
+ 	| SessionBeforeForkEvent
+@@ -1357,6 +1370,7 @@ export interface ExtensionAPI {
+ 		handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>,
+ 	): () => void;
+ 	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): () => void;
++	on(event: "session_start_complete", handler: ExtensionHandler<SessionStartCompleteEvent>): () => void;
+ 	on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): () => void;
+ 	on(
+ 		event: "session_before_switch",
+diff --git a/packages/coding-agent/src/core/resource-loader.ts b/packages/coding-agent/src/core/resource-loader.ts
+index 6babd01..adb0542 100644
+--- a/packages/coding-agent/src/core/resource-loader.ts
++++ b/packages/coding-agent/src/core/resource-loader.ts
+@@ -25,6 +25,7 @@ import { SettingsManager } from "./settings-manager.ts";
+ import type { Skill } from "./skills.ts";
+ import { loadSkills } from "./skills.ts";
+ import { createSourceInfo, type SourceInfo } from "./source-info.ts";
++import { finishStartupBenchmarkRun, startStartupBenchmarkRun } from "./startup-benchmark.ts";
+ import { resetTimings } from "./timings.ts";
+ 
+ export interface ResourceExtensionPaths {
+@@ -158,6 +159,8 @@ export function loadProjectContextFiles(options: {
+ 
+ export interface DefaultResourceLoaderOptions {
+ 	cwd: string;
++	mode?: string;
++	deferStartupBenchmarkFinalization?: boolean;
+ 	agentDir: string;
+ 	settingsManager?: SettingsManager;
+ 	eventBus?: EventBus;
+@@ -250,9 +253,14 @@ export class DefaultResourceLoader implements ResourceLoader {
+ 	private lastPromptPaths: string[];
+ 	private lastThemePaths: string[];
+ 	private loaded: boolean;
++	private loadAttempted: boolean;
++	private mode: string;
++	private deferStartupBenchmarkFinalization: boolean;
+ 
+ 	constructor(options: DefaultResourceLoaderOptions) {
+ 		this.cwd = resolvePath(options.cwd);
++		this.mode = options.mode ?? "unknown";
++		this.deferStartupBenchmarkFinalization = options.deferStartupBenchmarkFinalization ?? false;
+ 		this.agentDir = resolvePath(options.agentDir);
+ 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
+ 		this.eventBus = options.eventBus ?? createEventBus();
+@@ -299,6 +307,7 @@ export class DefaultResourceLoader implements ResourceLoader {
+ 		this.lastPromptPaths = [];
+ 		this.lastThemePaths = [];
+ 		this.loaded = false;
++		this.loadAttempted = false;
+ 	}
+ 
+ 	getExtensions(): LoadExtensionsResult {
+@@ -386,164 +395,171 @@ export class DefaultResourceLoader implements ResourceLoader {
+ 	}
+ 
+ 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
+-		resetTimings("extensions");
+-
+-		if (this.loaded) {
+-			clearExtensionCache();
+-		}
+-
+-		let preTrustExtensions: LoadExtensionsResult | undefined;
+-		if (options?.resolveProjectTrust) {
+-			preTrustExtensions = await this.loadProjectTrustExtensions();
+-			const projectTrusted = await options.resolveProjectTrust({ extensionsResult: preTrustExtensions });
+-			this.settingsManager.setProjectTrusted(projectTrusted);
+-		}
++		const trigger = this.loadAttempted ? "reload" : "startup";
++		this.loadAttempted = true;
++		startStartupBenchmarkRun(trigger, this.mode);
++		try {
++			resetTimings("extensions");
+ 
+-		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
+-		await this.settingsManager.reload();
+-		const resolvedPaths = await this.packageManager.resolve();
+-		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
+-			temporary: true,
+-		});
+-		// Kept on the instance so post-reload passes (extendResources) can still resolve package metadata.
+-		this.resourceMetadataByPath = new Map();
+-		const metadataByPath = this.resourceMetadataByPath;
++			if (this.loaded) {
++				clearExtensionCache();
++			}
+ 
+-		this.extensionSkillSourceInfos = new Map();
+-		this.extensionPromptSourceInfos = new Map();
+-		this.extensionThemeSourceInfos = new Map();
++			let preTrustExtensions: LoadExtensionsResult | undefined;
++			if (options?.resolveProjectTrust) {
++				preTrustExtensions = await this.loadProjectTrustExtensions();
++				const projectTrusted = await options.resolveProjectTrust({ extensionsResult: preTrustExtensions });
++				this.settingsManager.setProjectTrusted(projectTrusted);
++			}
+ 
+-		// Helper to extract enabled paths and store metadata
+-		const getEnabledResources = (resources: ResolvedResource[]): ResolvedResource[] => {
+-			for (const r of resources) {
+-				if (!metadataByPath.has(r.path)) {
+-					metadataByPath.set(r.path, r.metadata);
++			// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
++			await this.settingsManager.reload();
++			const resolvedPaths = await this.packageManager.resolve();
++			const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
++				temporary: true,
++			});
++			// Kept on the instance so post-reload passes (extendResources) can still resolve package metadata.
++			this.resourceMetadataByPath = new Map();
++			const metadataByPath = this.resourceMetadataByPath;
++
++			this.extensionSkillSourceInfos = new Map();
++			this.extensionPromptSourceInfos = new Map();
++			this.extensionThemeSourceInfos = new Map();
++
++			// Helper to extract enabled paths and store metadata
++			const getEnabledResources = (resources: ResolvedResource[]): ResolvedResource[] => {
++				for (const r of resources) {
++					if (!metadataByPath.has(r.path)) {
++						metadataByPath.set(r.path, r.metadata);
++					}
+ 				}
+-			}
+-			return resources.filter((r) => r.enabled);
+-		};
++				return resources.filter((r) => r.enabled);
++			};
+ 
+-		const getEnabledPaths = (resources: ResolvedResource[]): string[] =>
+-			getEnabledResources(resources).map((r) => r.path);
+-		const enabledExtensions = getEnabledPaths(resolvedPaths.extensions);
+-		const enabledSkillResources = getEnabledResources(resolvedPaths.skills);
+-		const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
+-		const enabledThemes = getEnabledPaths(resolvedPaths.themes);
++			const getEnabledPaths = (resources: ResolvedResource[]): string[] =>
++				getEnabledResources(resources).map((r) => r.path);
++			const enabledExtensions = getEnabledPaths(resolvedPaths.extensions);
++			const enabledSkillResources = getEnabledResources(resolvedPaths.skills);
++			const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
++			const enabledThemes = getEnabledPaths(resolvedPaths.themes);
+ 
+-		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
++			const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
+ 
+-		// Add CLI paths metadata
+-		for (const r of cliExtensionPaths.extensions) {
+-			if (!metadataByPath.has(r.path)) {
+-				metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
++			// Add CLI paths metadata
++			for (const r of cliExtensionPaths.extensions) {
++				if (!metadataByPath.has(r.path)) {
++					metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
++				}
+ 			}
+-		}
+-		for (const r of cliExtensionPaths.skills) {
+-			if (!metadataByPath.has(r.path)) {
+-				metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
++			for (const r of cliExtensionPaths.skills) {
++				if (!metadataByPath.has(r.path)) {
++					metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
++				}
+ 			}
+-		}
+-
+-		const cliEnabledExtensions = getEnabledPaths(cliExtensionPaths.extensions);
+-		const cliEnabledSkills = getEnabledPaths(cliExtensionPaths.skills);
+-		const cliEnabledPrompts = getEnabledPaths(cliExtensionPaths.prompts);
+-		const cliEnabledThemes = getEnabledPaths(cliExtensionPaths.themes);
+-
+-		const extensionPaths = this.noExtensions
+-			? cliEnabledExtensions
+-			: this.mergePaths(cliEnabledExtensions, enabledExtensions);
+ 
+-		const extensionsResult = await this.loadFinalExtensionSet(extensionPaths, preTrustExtensions);
+-		for (const p of this.additionalExtensionPaths) {
+-			if (isLocalPath(p)) {
+-				const resolved = this.resolveResourcePath(p);
+-				if (!existsSync(resolved)) {
+-					extensionsResult.errors.push({ path: resolved, error: `Extension path does not exist: ${resolved}` });
++			const cliEnabledExtensions = getEnabledPaths(cliExtensionPaths.extensions);
++			const cliEnabledSkills = getEnabledPaths(cliExtensionPaths.skills);
++			const cliEnabledPrompts = getEnabledPaths(cliExtensionPaths.prompts);
++			const cliEnabledThemes = getEnabledPaths(cliExtensionPaths.themes);
++
++			const extensionPaths = this.noExtensions
++				? cliEnabledExtensions
++				: this.mergePaths(cliEnabledExtensions, enabledExtensions);
++
++			const extensionsResult = await this.loadFinalExtensionSet(extensionPaths, preTrustExtensions);
++			for (const p of this.additionalExtensionPaths) {
++				if (isLocalPath(p)) {
++					const resolved = this.resolveResourcePath(p);
++					if (!existsSync(resolved)) {
++						extensionsResult.errors.push({ path: resolved, error: `Extension path does not exist: ${resolved}` });
++					}
++				}
++			}
++			this.extensionsResult = this.extensionsOverride ? this.extensionsOverride(extensionsResult) : extensionsResult;
++			this.applyExtensionSourceInfo(this.extensionsResult.extensions, metadataByPath);
++
++			const skillPaths = this.noSkills
++				? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
++				: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
++
++			this.lastSkillPaths = skillPaths;
++			this.updateSkillsFromPaths(skillPaths, metadataByPath);
++			for (const p of this.additionalSkillPaths) {
++				if (isLocalPath(p)) {
++					const resolved = this.resolveResourcePath(p);
++					if (!existsSync(resolved) && !this.skillDiagnostics.some((d) => d.path === resolved)) {
++						this.skillDiagnostics.push({ type: "error", message: "Skill path does not exist", path: resolved });
++					}
+ 				}
+ 			}
+-		}
+-		this.extensionsResult = this.extensionsOverride ? this.extensionsOverride(extensionsResult) : extensionsResult;
+-		this.applyExtensionSourceInfo(this.extensionsResult.extensions, metadataByPath);
+-
+-		const skillPaths = this.noSkills
+-			? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
+-			: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
+ 
+-		this.lastSkillPaths = skillPaths;
+-		this.updateSkillsFromPaths(skillPaths, metadataByPath);
+-		for (const p of this.additionalSkillPaths) {
+-			if (isLocalPath(p)) {
+-				const resolved = this.resolveResourcePath(p);
+-				if (!existsSync(resolved) && !this.skillDiagnostics.some((d) => d.path === resolved)) {
+-					this.skillDiagnostics.push({ type: "error", message: "Skill path does not exist", path: resolved });
++			const promptPaths = this.noPromptTemplates
++				? this.mergePaths(cliEnabledPrompts, this.additionalPromptTemplatePaths)
++				: this.mergePaths([...cliEnabledPrompts, ...enabledPrompts], this.additionalPromptTemplatePaths);
++
++			this.lastPromptPaths = promptPaths;
++			this.updatePromptsFromPaths(promptPaths, metadataByPath);
++			for (const p of this.additionalPromptTemplatePaths) {
++				if (isLocalPath(p)) {
++					const resolved = this.resolveResourcePath(p);
++					if (!existsSync(resolved) && !this.promptDiagnostics.some((d) => d.path === resolved)) {
++						this.promptDiagnostics.push({
++							type: "error",
++							message: "Prompt template path does not exist",
++							path: resolved,
++						});
++					}
+ 				}
+ 			}
+-		}
+ 
+-		const promptPaths = this.noPromptTemplates
+-			? this.mergePaths(cliEnabledPrompts, this.additionalPromptTemplatePaths)
+-			: this.mergePaths([...cliEnabledPrompts, ...enabledPrompts], this.additionalPromptTemplatePaths);
++			const themePaths = this.noThemes
++				? this.mergePaths(cliEnabledThemes, this.additionalThemePaths)
++				: this.mergePaths([...cliEnabledThemes, ...enabledThemes], this.additionalThemePaths);
+ 
+-		this.lastPromptPaths = promptPaths;
+-		this.updatePromptsFromPaths(promptPaths, metadataByPath);
+-		for (const p of this.additionalPromptTemplatePaths) {
+-			if (isLocalPath(p)) {
++			this.lastThemePaths = themePaths;
++			this.updateThemesFromPaths(themePaths, metadataByPath);
++			for (const p of this.additionalThemePaths) {
+ 				const resolved = this.resolveResourcePath(p);
+-				if (!existsSync(resolved) && !this.promptDiagnostics.some((d) => d.path === resolved)) {
+-					this.promptDiagnostics.push({
+-						type: "error",
+-						message: "Prompt template path does not exist",
+-						path: resolved,
+-					});
++				if (!existsSync(resolved) && !this.themeDiagnostics.some((d) => d.path === resolved)) {
++					this.themeDiagnostics.push({ type: "error", message: "Theme path does not exist", path: resolved });
+ 				}
+ 			}
+-		}
+ 
+-		const themePaths = this.noThemes
+-			? this.mergePaths(cliEnabledThemes, this.additionalThemePaths)
+-			: this.mergePaths([...cliEnabledThemes, ...enabledThemes], this.additionalThemePaths);
+-
+-		this.lastThemePaths = themePaths;
+-		this.updateThemesFromPaths(themePaths, metadataByPath);
+-		for (const p of this.additionalThemePaths) {
+-			const resolved = this.resolveResourcePath(p);
+-			if (!existsSync(resolved) && !this.themeDiagnostics.some((d) => d.path === resolved)) {
+-				this.themeDiagnostics.push({ type: "error", message: "Theme path does not exist", path: resolved });
++			const agentsFiles = {
++				agentsFiles: this.noContextFiles
++					? []
++					: loadProjectContextFiles({
++							cwd: this.cwd,
++							agentDir: this.agentDir,
++						}),
++			};
++			const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
++			this.agentsFiles = resolvedAgentsFiles.agentsFiles;
++
++			const systemPromptSource = this.systemPromptSource ?? this.discoverSystemPromptFile();
++			const baseSystemPrompt = resolvePromptInput(systemPromptSource, "system prompt");
++			this.systemPrompt = this.systemPromptOverride ? this.systemPromptOverride(baseSystemPrompt) : baseSystemPrompt;
++			this.systemPromptSourcePath =
++				systemPromptSource && existsSync(systemPromptSource) ? resolvePath(systemPromptSource) : undefined;
++
++			let appendSources = this.appendSystemPromptSource;
++			if (!appendSources) {
++				const discoveredAppendSystemPromptFile = this.discoverAppendSystemPromptFile();
++				appendSources = discoveredAppendSystemPromptFile ? [discoveredAppendSystemPromptFile] : [];
+ 			}
++			const baseAppend = appendSources
++				.map((s) => resolvePromptInput(s, "append system prompt"))
++				.filter((s): s is string => s !== undefined);
++			this.appendSystemPrompt = this.appendSystemPromptOverride
++				? this.appendSystemPromptOverride(baseAppend)
++				: baseAppend;
++			this.appendSystemPromptSourcePaths = appendSources
++				.filter((source) => existsSync(source))
++				.map((source) => resolvePath(source));
++			this.loaded = true;
++		} finally {
++			if (!this.deferStartupBenchmarkFinalization) finishStartupBenchmarkRun();
+ 		}
+-
+-		const agentsFiles = {
+-			agentsFiles: this.noContextFiles
+-				? []
+-				: loadProjectContextFiles({
+-						cwd: this.cwd,
+-						agentDir: this.agentDir,
+-					}),
+-		};
+-		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
+-		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
+-
+-		const systemPromptSource = this.systemPromptSource ?? this.discoverSystemPromptFile();
+-		const baseSystemPrompt = resolvePromptInput(systemPromptSource, "system prompt");
+-		this.systemPrompt = this.systemPromptOverride ? this.systemPromptOverride(baseSystemPrompt) : baseSystemPrompt;
+-		this.systemPromptSourcePath =
+-			systemPromptSource && existsSync(systemPromptSource) ? resolvePath(systemPromptSource) : undefined;
+-
+-		let appendSources = this.appendSystemPromptSource;
+-		if (!appendSources) {
+-			const discoveredAppendSystemPromptFile = this.discoverAppendSystemPromptFile();
+-			appendSources = discoveredAppendSystemPromptFile ? [discoveredAppendSystemPromptFile] : [];
+-		}
+-		const baseAppend = appendSources
+-			.map((s) => resolvePromptInput(s, "append system prompt"))
+-			.filter((s): s is string => s !== undefined);
+-		this.appendSystemPrompt = this.appendSystemPromptOverride
+-			? this.appendSystemPromptOverride(baseAppend)
+-			: baseAppend;
+-		this.appendSystemPromptSourcePaths = appendSources
+-			.filter((source) => existsSync(source))
+-			.map((source) => resolvePath(source));
+-		this.loaded = true;
+ 	}
+ 
+ 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {
+diff --git a/packages/coding-agent/src/core/skills.ts b/packages/coding-agent/src/core/skills.ts
+index 744c139..9d359b0 100644
+--- a/packages/coding-agent/src/core/skills.ts
++++ b/packages/coding-agent/src/core/skills.ts
+@@ -1,11 +1,12 @@
+ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+ import ignore from "ignore";
+-import { basename, dirname, join, relative, resolve, sep } from "path";
++import { basename, dirname, extname, join, relative, resolve, sep } from "path";
+ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+ import { parseFrontmatter } from "../utils/frontmatter.ts";
+ import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+ import type { ResourceDiagnostic } from "./diagnostics.ts";
+ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
++import { measureStartupResourceSync } from "./startup-benchmark.ts";
+ 
+ /** Max name length per spec */
+ const MAX_NAME_LENGTH = 64;
+@@ -277,6 +278,38 @@ function loadSkillsFromDirInternal(
+ function loadSkillFromFile(
+ 	filePath: string,
+ 	source: string,
++): { skill: Skill | null; diagnostics: ResourceDiagnostic[] } {
++	const fallbackName =
++		basename(filePath) === "SKILL.md" ? basename(dirname(filePath)) : basename(filePath, extname(filePath));
++	const measurement = {
++		kind: "skill" as const,
++		phase: "parse" as const,
++		path: filePath,
++		name: fallbackName,
++	};
++	let result: { skill: Skill | null; diagnostics: ResourceDiagnostic[] } | undefined;
++	try {
++		return measureStartupResourceSync(measurement, () => {
++			const loaded = loadSkillFromFileUnmeasured(filePath, source);
++			result = loaded;
++			if (loaded.skill) measurement.name = loaded.skill.name;
++			// A rejected load (read/parse/validation with no skill) is an error. A
++			// loaded skill may still have warning-only metadata diagnostics.
++			if (!loaded.skill && loaded.diagnostics.length > 0) {
++				throw new Error(loaded.diagnostics[0].message);
++			}
++			return loaded;
++		});
++	} catch (error) {
++		if (result) return result;
++		// Instrumentation must not replace an unexpected loader failure.
++		throw error;
++	}
++}
++
++function loadSkillFromFileUnmeasured(
++	filePath: string,
++	source: string,
+ ): { skill: Skill | null; diagnostics: ResourceDiagnostic[] } {
+ 	const diagnostics: ResourceDiagnostic[] = [];
+ 	const isDeclaredSkill = basename(filePath) === "SKILL.md";
+diff --git a/packages/coding-agent/src/core/startup-benchmark.ts b/packages/coding-agent/src/core/startup-benchmark.ts
+new file mode 100644
+index 0000000..5f4a843
+--- /dev/null
++++ b/packages/coding-agent/src/core/startup-benchmark.ts
+@@ -0,0 +1,178 @@
++export type StartupResourceKind = "extension" | "skill";
++export type StartupResourcePhase = "module-import" | "factory" | "parse";
++export type StartupBenchmarkTrigger = "startup" | "reload";
++
++export interface StartupResourceTiming {
++	kind: StartupResourceKind;
++	phase: StartupResourcePhase;
++	path: string;
++	name: string;
++	durationMs: number;
++	status: "ok" | "error";
++	error?: string;
++}
++
++export interface StartupBenchmarkRun {
++	version: 1;
++	runId: string;
++	startedAt: string;
++	mode: string;
++	trigger: StartupBenchmarkTrigger;
++	totalMs: number;
++	resources: readonly StartupResourceTiming[];
++}
++
++export interface StartupResourceInput {
++	kind: StartupResourceKind;
++	phase: StartupResourcePhase;
++	path: string;
++	name: string;
++}
++
++export interface StartupBenchmark {
++	start(input: { trigger: StartupBenchmarkTrigger; mode: string }): void;
++	measure<T>(input: StartupResourceInput, operation: () => T | Promise<T>): Promise<T>;
++	measureSync<T>(input: StartupResourceInput, operation: () => T): T;
++	finish(): StartupBenchmarkRun | undefined;
++	getRun(): StartupBenchmarkRun | undefined;
++}
++
++interface Clock {
++	now: () => number;
++}
++
++let nextRunId = 0;
++
++function freezeRun(run: StartupBenchmarkRun): StartupBenchmarkRun {
++	const resources = run.resources.map((resource) => Object.freeze({ ...resource }));
++	return Object.freeze({ ...run, resources: Object.freeze(resources) });
++}
++
++function errorMessage(error: unknown): string {
++	return error instanceof Error ? error.message : String(error);
++}
++
++export function createStartupBenchmark(options: { enabled: boolean; now?: () => number }): StartupBenchmark {
++	const clock: Clock = { now: options.now ?? (() => Number(process.hrtime.bigint()) / 1_000_000) };
++	let active:
++		| {
++				run: StartupBenchmarkRun;
++				lastTimestamp: number;
++				startedTimestamp: number;
++				resources: StartupResourceTiming[];
++		  }
++		| undefined;
++	let completed: StartupBenchmarkRun | undefined;
++
++	return {
++		start(input) {
++			if (!options.enabled) return;
++			completed = undefined;
++			const startedAt = new Date().toISOString();
++			const startedTimestamp = clock.now();
++			active = {
++				run: {
++					version: 1,
++					runId: `startup-${++nextRunId}`,
++					startedAt,
++					mode: input.mode,
++					trigger: input.trigger,
++					totalMs: 0,
++					resources: [],
++				},
++				lastTimestamp: startedTimestamp,
++				startedTimestamp,
++				resources: [],
++			};
++		},
++		async measure(input, operation) {
++			if (!options.enabled || active === undefined) return await operation();
++			const run = active;
++			const started = clock.now();
++			try {
++				const result = await operation();
++				const ended = clock.now();
++				run.lastTimestamp = ended;
++				run.resources.push({ ...input, durationMs: Math.max(0, ended - started), status: "ok" });
++				return result;
++			} catch (error) {
++				const ended = clock.now();
++				run.lastTimestamp = ended;
++				run.resources.push({
++					...input,
++					durationMs: Math.max(0, ended - started),
++					status: "error",
++					error: errorMessage(error),
++				});
++				throw error;
++			}
++		},
++		measureSync(input, operation) {
++			if (!options.enabled || active === undefined) return operation();
++			const run = active;
++			const started = clock.now();
++			try {
++				const result = operation();
++				const ended = clock.now();
++				run.lastTimestamp = ended;
++				run.resources.push({ ...input, durationMs: Math.max(0, ended - started), status: "ok" });
++				return result;
++			} catch (error) {
++				const ended = clock.now();
++				run.lastTimestamp = ended;
++				run.resources.push({
++					...input,
++					durationMs: Math.max(0, ended - started),
++					status: "error",
++					error: errorMessage(error),
++				});
++				throw error;
++			}
++		},
++		finish() {
++			if (!options.enabled || active === undefined) return undefined;
++			const run = active;
++			const finishedTimestamp = clock.now();
++			const snapshot = freezeRun({
++				...run.run,
++				totalMs: Math.max(0, finishedTimestamp - run.startedTimestamp),
++				resources: run.resources,
++			});
++			completed = snapshot;
++			active = undefined;
++			return snapshot;
++		},
++		getRun() {
++			return active === undefined ? completed : undefined;
++		},
++	};
++}
++
++const singleton = createStartupBenchmark({ enabled: process.env.PI_STARTUP_BENCHMARK === "1" });
++
++export function canonicalStartupBenchmarkMode(mode: string): string {
++	return mode === "interactive" ? "tui" : mode;
++}
++
++export function startStartupBenchmarkRun(trigger: StartupBenchmarkTrigger, mode: string): void {
++	singleton.start({ trigger, mode: canonicalStartupBenchmarkMode(mode) });
++}
++
++export async function measureStartupResource<T>(
++	input: StartupResourceInput,
++	operation: () => T | Promise<T>,
++): Promise<T> {
++	return await singleton.measure(input, operation);
++}
++
++export function measureStartupResourceSync<T>(input: StartupResourceInput, operation: () => T): T {
++	return singleton.measureSync(input, operation);
++}
++
++export function finishStartupBenchmarkRun(): StartupBenchmarkRun | undefined {
++	return singleton.finish();
++}
++
++export function getStartupBenchmarkRun(): StartupBenchmarkRun | undefined {
++	return singleton.getRun();
++}
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 195a112..f41e7c3 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -563,6 +563,15 @@ export interface MainOptions {
+ 	extensionFactories?: InlineExtension[];
+ }
+ 
++export function isStartupBenchmarkModeSupported(mode: string): boolean {
++	return mode === "interactive" || mode === "print" || mode === "json" || mode === "rpc";
++}
++
++export function getStartupBenchmarkModeError(mode: string): string | undefined {
++	if (!isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK) || isStartupBenchmarkModeSupported(mode)) return undefined;
++	return `Error: PI_STARTUP_BENCHMARK is not supported in ${mode} mode`;
++}
++
+ export async function main(args: string[], options?: MainOptions) {
+ 	resetTimings();
+ 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
+@@ -764,6 +773,8 @@ export async function main(args: string[], options?: MainOptions) {
+ 					}
+ 				: undefined,
+ 			resourceLoaderOptions: {
++				mode: appMode,
++				deferStartupBenchmarkFinalization: true,
+ 				additionalExtensionPaths: resolvedExtensionPaths,
+ 				additionalSkillPaths: resolvedSkillPaths,
+ 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
+@@ -911,9 +922,9 @@ export async function main(args: string[], options?: MainOptions) {
+ 		process.exit(1);
+ 	}
+ 
+-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+-	if (startupBenchmark && appMode !== "interactive") {
+-		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
++	const startupBenchmarkModeError = getStartupBenchmarkModeError(appMode);
++	if (startupBenchmarkModeError) {
++		console.error(chalk.red(startupBenchmarkModeError));
+ 		process.exit(1);
+ 	}
+ 
+@@ -943,7 +954,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 			tuiMode: parsed.tuiMode,
+ 			initialThemeSetting: parsed.useTheme,
+ 		});
+-		if (startupBenchmark) {
++		if (isTruthyEnvFlag(process.env.PI_TIMING)) {
+ 			await interactiveMode.init();
+ 			time("interactiveMode.init");
+ 			// Give the TUI's stdin handler a brief chance to consume terminal query replies
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 968f741..b0377a1 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -111,6 +111,7 @@ import {
+ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
+ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+ import type { SourceInfo } from "../../core/source-info.ts";
++import { getStartupBenchmarkRun } from "../../core/startup-benchmark.ts";
+ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
+ import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
+ import type { TruncationResult } from "../../core/tools/truncate.ts";
+@@ -2179,6 +2180,7 @@ export class InteractiveMode {
+ 				})();
+ 			},
+ 			getSystemPrompt: () => this.session.systemPrompt,
++			getStartupBenchmark: () => getStartupBenchmarkRun(),
+ 		});
+ 
+ 		// Set up the extension shortcut handler on the default editor

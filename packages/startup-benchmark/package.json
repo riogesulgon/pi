@@ -1,0 +1,43 @@
+{
+  "name": "pi-startup-benchmark",
+  "version": "0.1.0",
+  "description": "Opt-in Pi startup benchmark extension and patch-only installer",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/earendil-works/pi.git",
+    "directory": "packages/startup-benchmark"
+  },
+  "bugs": {
+    "url": "https://github.com/earendil-works/pi/issues"
+  },
+  "homepage": "https://github.com/earendil-works/pi/tree/main/packages/startup-benchmark",
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "startup",
+    "benchmark",
+    "extension"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "pi-startup-benchmark": "extension/pi-startup-benchmark"
+  },
+  "pi": {
+    "extensions": [
+      "extension/index.ts"
+    ]
+  },
+  "files": [
+    "extension",
+    "pi-core.patch",
+    "install.sh",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
