@@ -3277,8 +3277,8 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
-		await this._extensionRunner.emit(this._sessionStartEvent);
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+		await this._extensionRunner.emit(this._sessionStartEvent);
 		finishStartupBenchmarkRun();
 		await this._extensionRunner.emit({ type: "session_start_complete", reason: this._sessionStartEvent.reason });
 	}
@@ -3694,9 +3694,12 @@ export class AgentSession {
 			this._extensionErrorListener;
 		if (hasBindings) {
 			await options?.beforeSessionStart?.();
-			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
-			this._extensionRunner.reportUnhandledMcpServers();
 			await this.extendResourcesFromExtensions("reload");
+			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+			finishStartupBenchmarkRun();
+			await this._extensionRunner.emit({ type: "session_start_complete", reason: "reload" });
+		} else {
+			finishStartupBenchmarkRun();
 		}
 	}
 

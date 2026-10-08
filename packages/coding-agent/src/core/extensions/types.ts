@@ -713,7 +713,7 @@ export type ProjectTrustHandler = (
 	ctx: ProjectTrustContext,
 ) => Promise<ProjectTrustEventResult> | ProjectTrustEventResult;
 
-/** Fired after session_start to allow extensions to provide additional resource paths. */
+/** Fired during startup/reload before session_start to allow extensions to provide additional resource paths. */
 export interface ResourcesDiscoverEvent {
 	type: "resources_discover";
 	cwd: string;

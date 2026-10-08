@@ -511,8 +511,15 @@ describe("AgentSession model and extension characterization", () => {
 		const harness = await createHarness({
 			extensionFactories: [
 				(pi) => {
+					pi.on("resources_discover", async (event) => {
+						lifecycleEvents.push(`resources:${event.reason}`);
+						return {};
+					});
 					pi.on("session_start", async (event) => {
 						lifecycleEvents.push(`start:${event.reason}`);
+					});
+					pi.on("session_start_complete", async (event) => {
+						lifecycleEvents.push(`complete:${event.reason}`);
 					});
 					pi.on("session_shutdown", async (event) => {
 						lifecycleEvents.push(`shutdown:${event.reason}`);
@@ -525,6 +532,14 @@ describe("AgentSession model and extension characterization", () => {
 		await harness.session.bindExtensions({ shutdownHandler: () => {} });
 		await harness.session.reload();
 
-		expect(lifecycleEvents).toEqual(["start:startup", "shutdown:reload", "start:reload"]);
+		expect(lifecycleEvents).toEqual([
+			"resources:startup",
+			"start:startup",
+			"complete:startup",
+			"shutdown:reload",
+			"resources:reload",
+			"start:reload",
+			"complete:reload",
+		]);
 	});
 });
