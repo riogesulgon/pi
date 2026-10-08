@@ -70,4 +70,10 @@ describe("startup benchmark", () => {
 		benchmark.start({ trigger: "startup", mode: "tui" });
 		expect(benchmark.finish()!.totalMs).toBe(37);
 	});
+
+	it("records opt-in runs for noninteractive modes", () => {
+		const benchmark = createStartupBenchmark({ enabled: true, now: () => 10 });
+		benchmark.start({ trigger: "startup", mode: "print" });
+		expect(benchmark.finish()!.mode).toBe("print");
+	});
 });

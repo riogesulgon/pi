@@ -930,10 +930,6 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
-	if (startupBenchmark && appMode !== "interactive") {
-		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
-		process.exit(1);
-	}
 
 	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
 	if (!offlineMode && appMode === "rpc") {
