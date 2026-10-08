@@ -786,6 +786,7 @@ export async function main(args: string[], options?: MainOptions) {
 					}
 				: undefined,
 			resourceLoaderOptions: {
+				mode: appMode,
 				additionalExtensionPaths: resolvedExtensionPaths,
 				additionalSkillPaths: resolvedSkillPaths,
 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
@@ -938,7 +939,6 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
 	const startupBenchmarkModeError = getStartupBenchmarkModeError(appMode);
 	if (startupBenchmarkModeError) {
 		console.error(chalk.red(startupBenchmarkModeError));
@@ -971,7 +971,7 @@ export async function main(args: string[], options?: MainOptions) {
 			tuiMode: parsed.tuiMode,
 			initialThemeSetting: parsed.useTheme,
 		});
-		if (startupBenchmark) {
+		if (isTruthyEnvFlag(process.env.PI_TIMING)) {
 			await interactiveMode.init();
 			time("interactiveMode.init");
 			// Give the TUI's stdin handler a brief chance to consume terminal query replies

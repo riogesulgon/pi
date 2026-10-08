@@ -622,8 +622,13 @@ async function initializeExtension(
 	const extension = createExtension(extensionPath, resolvedPath);
 	const load = createExtensionAPI(extension, runtime, cwd, eventBus);
 	try {
-		await factory(load.api);
-		load.commit();
+		await measureStartupResource(
+			{ kind: "extension", phase: "factory", path: resolvedPath, name: extensionPath },
+			async () => {
+				await factory(load.api);
+				load.commit();
+			},
+		);
 	} catch (error) {
 		load.discard();
 		throw error;
@@ -651,10 +656,7 @@ async function loadExtension(
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
 
-		const extension = await measureStartupResource(
-			{ kind: "extension", phase: "factory", path: resolvedPath, name: extensionPath },
-			() => initializeExtension(factory, extensionPath, resolvedPath, cwd, eventBus, runtime),
-		);
+		const extension = await initializeExtension(factory, extensionPath, resolvedPath, cwd, eventBus, runtime);
 
 		return { extension, error: null };
 	} catch (err) {

@@ -3276,9 +3276,8 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
-		await this._extensionRunner.emit(this._sessionStartEvent);
-		this._extensionRunner.reportUnhandledMcpServers();
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+		await this._extensionRunner.emit(this._sessionStartEvent);
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {

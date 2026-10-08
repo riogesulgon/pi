@@ -129,6 +129,34 @@ describe("ExtensionRunner", () => {
 	};
 
 	describe("startup benchmark context", () => {
+		it("measures inline extension factory success and failure", async () => {
+			startStartupBenchmarkRun("startup", "test");
+			await loadExtensionFromFactory(() => {}, tempDir, createEventBus(), createExtensionRuntime(), "inline-ok");
+			await expect(
+				loadExtensionFromFactory(
+					() => {
+						throw new Error("inline factory failure");
+					},
+					tempDir,
+					createEventBus(),
+					createExtensionRuntime(),
+					"inline-error",
+				),
+			).rejects.toThrow("inline factory failure");
+			const run = finishStartupBenchmarkRun()!;
+			expect(run.resources).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ path: "inline-ok", phase: "factory", status: "ok" }),
+					expect.objectContaining({
+						path: "inline-error",
+						phase: "factory",
+						status: "error",
+						error: "inline factory failure",
+					}),
+				]),
+			);
+		});
+
 		it("returns an immutable completed benchmark snapshot", async () => {
 			startStartupBenchmarkRun("startup", "test");
 			await measureStartupResource(

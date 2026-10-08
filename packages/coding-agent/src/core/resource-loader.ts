@@ -272,6 +272,7 @@ export function loadProjectContextFiles(options: {
 
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
+	mode?: string;
 	agentDir: string;
 	settingsManager?: SettingsManager;
 	eventBus?: EventBus;
@@ -369,9 +370,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private lastThemePaths: string[];
 	private loaded: boolean;
 	private loadAttempted: boolean;
+	private mode: string;
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
+		this.mode = options.mode ?? "unknown";
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
@@ -512,7 +515,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
 		const trigger = this.loadAttempted ? "reload" : "startup";
 		this.loadAttempted = true;
-		startStartupBenchmarkRun(trigger, process.env.PI_MODE ?? "unknown");
+		startStartupBenchmarkRun(trigger, this.mode);
 		try {
 		resetTimings("extensions");
 
