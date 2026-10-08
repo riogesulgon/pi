@@ -273,6 +273,7 @@ export function loadProjectContextFiles(options: {
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
 	mode?: string;
+	deferStartupBenchmarkFinalization?: boolean;
 	agentDir: string;
 	settingsManager?: SettingsManager;
 	eventBus?: EventBus;
@@ -371,10 +372,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private loaded: boolean;
 	private loadAttempted: boolean;
 	private mode: string;
+	private deferStartupBenchmarkFinalization: boolean;
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
 		this.mode = options.mode ?? "unknown";
+		this.deferStartupBenchmarkFinalization = options.deferStartupBenchmarkFinalization ?? false;
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
@@ -682,7 +685,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			.map((source) => resolvePath(source));
 		this.loaded = true;
 		} finally {
-			finishStartupBenchmarkRun();
+			if (!this.deferStartupBenchmarkFinalization) finishStartupBenchmarkRun();
 		}
 	}
 

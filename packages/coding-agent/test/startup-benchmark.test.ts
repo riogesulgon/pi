@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createStartupBenchmark } from "../src/core/startup-benchmark.ts";
+import { canonicalStartupBenchmarkMode, createStartupBenchmark } from "../src/core/startup-benchmark.ts";
 
 describe("startup benchmark", () => {
+	it("canonicalizes interactive mode to tui while preserving public noninteractive modes", () => {
+		expect(canonicalStartupBenchmarkMode("interactive")).toBe("tui");
+		expect(canonicalStartupBenchmarkMode("print")).toBe("print");
+		expect(canonicalStartupBenchmarkMode("json")).toBe("json");
+		expect(canonicalStartupBenchmarkMode("rpc")).toBe("rpc");
+	});
 	it("returns no run and invokes operations without allocating records when disabled", async () => {
 		const benchmark = createStartupBenchmark({ enabled: false, now: () => 0 });
 		await expect(

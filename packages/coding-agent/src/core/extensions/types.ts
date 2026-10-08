@@ -753,6 +753,12 @@ export interface SessionStartEvent {
 }
 
 /** Fired when the current session metadata changes. */
+export interface SessionStartCompleteEvent {
+	type: "session_start_complete";
+	reason: "startup" | "reload" | "new" | "resume" | "fork";
+}
+
+/** Fired after session_start handlers and extension-provided resources are finalized. */
 export interface SessionInfoChangedEvent {
 	type: "session_info_changed";
 	/** Current normalized session name. Undefined when the name is cleared. */
@@ -853,6 +859,7 @@ export interface SessionTreeEvent {
 
 export type SessionEvent =
 	| SessionStartEvent
+	| SessionStartCompleteEvent
 	| SessionInfoChangedEvent
 	| SessionBeforeSwitchEvent
 	| SessionBeforeForkEvent
@@ -1578,6 +1585,7 @@ export interface ExtensionAPI {
 		handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>,
 	): () => void;
 	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): () => void;
+	on(event: "session_start_complete", handler: ExtensionHandler<SessionStartCompleteEvent>): () => void;
 	on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): () => void;
 	on(
 		event: "session_before_switch",

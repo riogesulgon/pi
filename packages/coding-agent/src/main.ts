@@ -787,6 +787,7 @@ export async function main(args: string[], options?: MainOptions) {
 				: undefined,
 			resourceLoaderOptions: {
 				mode: appMode,
+				deferStartupBenchmarkFinalization: true,
 				additionalExtensionPaths: resolvedExtensionPaths,
 				additionalSkillPaths: resolvedSkillPaths,
 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,

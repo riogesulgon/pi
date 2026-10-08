@@ -150,8 +150,12 @@ export function createStartupBenchmark(options: { enabled: boolean; now?: () => 
 
 const singleton = createStartupBenchmark({ enabled: process.env.PI_STARTUP_BENCHMARK === "1" });
 
+export function canonicalStartupBenchmarkMode(mode: string): string {
+	return mode === "interactive" ? "tui" : mode;
+}
+
 export function startStartupBenchmarkRun(trigger: StartupBenchmarkTrigger, mode: string): void {
-	singleton.start({ trigger, mode });
+	singleton.start({ trigger, mode: canonicalStartupBenchmarkMode(mode) });
 }
 
 export async function measureStartupResource<T>(
