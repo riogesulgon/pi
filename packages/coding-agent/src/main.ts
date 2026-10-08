@@ -570,6 +570,15 @@ export interface MainOptions {
 	extensionFactories?: InlineExtension[];
 }
 
+export function isStartupBenchmarkModeSupported(mode: string): boolean {
+	return mode === "interactive" || mode === "print" || mode === "json" || mode === "rpc";
+}
+
+export function getStartupBenchmarkModeError(mode: string): string | undefined {
+	if (!isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK) || isStartupBenchmarkModeSupported(mode)) return undefined;
+	return `Error: PI_STARTUP_BENCHMARK is not supported in ${mode} mode`;
+}
+
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
@@ -930,6 +939,11 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+	const startupBenchmarkModeError = getStartupBenchmarkModeError(appMode);
+	if (startupBenchmarkModeError) {
+		console.error(chalk.red(startupBenchmarkModeError));
+		process.exit(1);
+	}
 
 	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
 	if (!offlineMode && appMode === "rpc") {
