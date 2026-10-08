@@ -2,7 +2,14 @@ import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const previousStartupBenchmarkEnv = vi.hoisted(() => {
+	const previous = process.env.PI_STARTUP_BENCHMARK;
+	process.env.PI_STARTUP_BENCHMARK = "1";
+	return previous;
+});
+
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
 import { DefaultResourceLoader, loadProjectContextFiles } from "../src/core/resource-loader.ts";
@@ -10,8 +17,14 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
+import { getStartupBenchmarkRun } from "../src/core/startup-benchmark.ts";
 
 import { createModelRegistry } from "./model-runtime-test-utils.ts";
+
+afterAll(() => {
+	if (previousStartupBenchmarkEnv === undefined) delete process.env.PI_STARTUP_BENCHMARK;
+	else process.env.PI_STARTUP_BENCHMARK = previousStartupBenchmarkEnv;
+});
 
 describe("DefaultResourceLoader", () => {
 	let tempDir: string;
@@ -31,6 +44,101 @@ describe("DefaultResourceLoader", () => {
 	});
 
 	describe("reload", () => {
+		it("measures extension and skill loading while retaining loader diagnostics", async () => {
+			const extensionDir = join(agentDir, "extensions");
+			const skillsDir = join(agentDir, "skills", "timed-skill");
+			mkdirSync(extensionDir, { recursive: true });
+			mkdirSync(skillsDir, { recursive: true });
+			const timedExtensionPath = join(extensionDir, "timed.ts");
+			const failingExtensionPath = join(extensionDir, "failing.ts");
+			const timedSkillPath = join(skillsDir, "SKILL.md");
+			const invalidSkillPath = join(agentDir, "skills", "invalid", "SKILL.md");
+			mkdirSync(join(agentDir, "skills", "invalid"), { recursive: true });
+			writeFileSync(timedExtensionPath, "export default async () => {};\n");
+			writeFileSync(failingExtensionPath, 'export default () => { throw new Error("timed factory failure"); };\n');
+			writeFileSync(timedSkillPath, "---\nname: timed-skill\ndescription: Timed skill\n---\nContent\n");
+			writeFileSync(invalidSkillPath, "---\ndescription: Broken: unquoted colon\n---\nContent\n");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noPromptTemplates: true, noThemes: true });
+			await loader.reload();
+			const run = getStartupBenchmarkRun();
+
+			expect(run?.resources).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						kind: "extension",
+						phase: "module-import",
+						path: timedExtensionPath,
+						status: "ok",
+					}),
+					expect.objectContaining({ kind: "extension", phase: "factory", path: timedExtensionPath, status: "ok" }),
+					expect.objectContaining({
+						kind: "skill",
+						phase: "parse",
+						path: timedSkillPath,
+						name: "timed-skill",
+						status: "ok",
+					}),
+					expect.objectContaining({ kind: "skill", phase: "parse", path: invalidSkillPath, status: "error" }),
+					expect.objectContaining({
+						kind: "extension",
+						phase: "factory",
+						path: failingExtensionPath,
+						status: "error",
+						error: "timed factory failure",
+					}),
+				]),
+			);
+			expect(loader.getExtensions().errors).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						path: failingExtensionPath,
+						error: "Failed to load extension: timed factory failure",
+					}),
+				]),
+			);
+			expect(loader.getSkills().diagnostics).toEqual(
+				expect.arrayContaining([expect.objectContaining({ path: invalidSkillPath, type: "warning" })]),
+			);
+			expect(getStartupBenchmarkRun()).toBe(run);
+		});
+
+		it("labels the first reload as startup and later reloads as reload", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noPromptTemplates: true, noThemes: true });
+
+			await loader.reload();
+			const first = getStartupBenchmarkRun();
+			await loader.reload();
+			const second = getStartupBenchmarkRun();
+
+			expect(first?.trigger).toBe("startup");
+			expect(second?.trigger).toBe("reload");
+			expect(second?.runId).not.toBe(first?.runId);
+		});
+
+		it("labels a reload after a failed first load as reload", async () => {
+			let attempts = 0;
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				noPromptTemplates: true,
+				noThemes: true,
+				extensionsOverride: (base) => {
+					if (attempts++ === 0) throw new Error("first load failed");
+					return base;
+				},
+			});
+
+			await expect(loader.reload()).rejects.toThrow("first load failed");
+			const first = getStartupBenchmarkRun();
+			await loader.reload();
+			const second = getStartupBenchmarkRun();
+
+			expect(first?.trigger).toBe("startup");
+			expect(second?.trigger).toBe("reload");
+			expect(second?.runId).not.toBe(first?.runId);
+		});
+
 		it("should initialize with empty results before reload", () => {
 			const loader = new DefaultResourceLoader({ cwd, agentDir });
 

@@ -80,6 +80,7 @@ import type {
 import type { Settings } from "../settings-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
+import type { StartupBenchmarkRun } from "../startup-benchmark.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditToolDetails } from "../tools/edit.ts";
@@ -362,6 +363,11 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/**
+	 * Return the optional observational startup benchmark snapshot.
+	 * This does not mutate benchmark state or affect extension execution.
+	 */
+	getStartupBenchmark(): StartupBenchmarkRun | undefined;
 }
 
 /** Options for {@link ExtensionToolContext.executeTool}. */
@@ -707,7 +713,7 @@ export type ProjectTrustHandler = (
 	ctx: ProjectTrustContext,
 ) => Promise<ProjectTrustEventResult> | ProjectTrustEventResult;
 
-/** Fired after session_start to allow extensions to provide additional resource paths. */
+/** Fired during startup/reload before session_start to allow extensions to provide additional resource paths. */
 export interface ResourcesDiscoverEvent {
 	type: "resources_discover";
 	cwd: string;
@@ -747,6 +753,12 @@ export interface SessionStartEvent {
 }
 
 /** Fired when the current session metadata changes. */
+export interface SessionStartCompleteEvent {
+	type: "session_start_complete";
+	reason: "startup" | "reload" | "new" | "resume" | "fork";
+}
+
+/** Fired after session_start handlers and extension-provided resources are finalized. */
 export interface SessionInfoChangedEvent {
 	type: "session_info_changed";
 	/** Current normalized session name. Undefined when the name is cleared. */
@@ -847,6 +859,7 @@ export interface SessionTreeEvent {
 
 export type SessionEvent =
 	| SessionStartEvent
+	| SessionStartCompleteEvent
 	| SessionInfoChangedEvent
 	| SessionBeforeSwitchEvent
 	| SessionBeforeForkEvent
@@ -1572,6 +1585,7 @@ export interface ExtensionAPI {
 		handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>,
 	): () => void;
 	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): () => void;
+	on(event: "session_start_complete", handler: ExtensionHandler<SessionStartCompleteEvent>): () => void;
 	on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): () => void;
 	on(
 		event: "session_before_switch",

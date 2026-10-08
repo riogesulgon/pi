@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DATA_DIR="${PI_STARTUP_BENCHMARK_DIR:-$HOME/.pi/agent/startup-benchmark}"
+LATEST="$DATA_DIR/latest.json"
+HISTORY="$DATA_DIR/history.json"
+
+usage() {
+  printf 'Usage: %s [start|history|clear]\n' "${0##*/}"
+}
+
+start_pi() {
+  local pi_bin="${PI_BIN:-pi}"
+  PI_STARTUP_BENCHMARK=1 exec "$pi_bin"
+}
+
+require_jq() {
+  command -v jq >/dev/null || {
+    printf 'Error: jq is required. Install it with: sudo pacman -S jq\n' >&2
+    exit 1
+  }
+}
+
+clear_data() {
+  rm -f "$LATEST" "$HISTORY"
+  printf 'Startup benchmark data cleared.\n'
+}
+
+show_latest() {
+  if [[ ! -r "$LATEST" ]]; then
+    printf 'No startup benchmark data. Run: PI_STARTUP_BENCHMARK=1 pi\n'
+    return
+  fi
+
+  require_jq
+  if ! jq -e '.version == 1 and (.resources | type == "array")' "$LATEST" >/dev/null 2>&1; then
+    printf 'Benchmark data is invalid: %s\n' "$LATEST" >&2
+    exit 1
+  fi
+
+  jq -r '
+    def safe: tostring | gsub("[[:cntrl:]]"; "?");
+    "Startup benchmark: \(.totalMs)ms (\(.mode | safe)/\(.trigger | safe))",
+    "",
+    "  ms     kind       phase          status  name                 path",
+    "  -----  ---------  -------------  ------  -------------------  ----",
+    (.resources
+      | sort_by(-.durationMs, .path)
+      | .[]
+      | "  \(.durationMs | tostring | . + "ms" | .[0:7])  \(.kind | safe | .[0:9])  \(.phase | safe | .[0:13])  \(.status | safe | .[0:6])  \(.name | safe | .[0:19])  \(.path | safe)"
+    )
+  ' "$LATEST"
+}
+
+show_history() {
+  if [[ ! -r "$HISTORY" ]]; then
+    printf 'No startup benchmark history.\n'
+    return
+  fi
+
+  require_jq
+  if ! jq -e '.version == 1 and (.runs | type == "array")' "$HISTORY" >/dev/null 2>&1; then
+    printf 'Benchmark history is invalid: %s\n' "$HISTORY" >&2
+    exit 1
+  fi
+
+  jq -r '
+    def safe: tostring | gsub("[[:cntrl:]]"; "?");
+    "Startup benchmark history: \(.runs | length) runs",
+    "",
+    "  avg ms  max ms  kind       phase          path",
+    "  ------  ------  ---------  -------------  ----",
+    ([.runs[].resources[]]
+      | group_by([.kind, .phase, .path])
+      | map({
+          kind: .[0].kind,
+          phase: .[0].phase,
+          path: .[0].path,
+          averageMs: (map(.durationMs) | add / length),
+          maxMs: (map(.durationMs) | max)
+        })
+      | sort_by(-.averageMs, .path)
+      | .[]
+      | "  \(.averageMs | floor | tostring | . + "ms" | .[0:8])  \(.maxMs | tostring | . + "ms" | .[0:7])  \(.kind | safe | .[0:9])  \(.phase | safe | .[0:13])  \(.path | safe)"
+    )
+  ' "$HISTORY"
+}
+
+case "${1:-}" in
+  "") show_latest ;;
+  start) start_pi ;;
+  history) show_history ;;
+  clear) clear_data ;;
+  -h|--help|help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

@@ -570,6 +570,15 @@ export interface MainOptions {
 	extensionFactories?: InlineExtension[];
 }
 
+export function isStartupBenchmarkModeSupported(mode: string): boolean {
+	return mode === "interactive" || mode === "print" || mode === "json" || mode === "rpc";
+}
+
+export function getStartupBenchmarkModeError(mode: string): string | undefined {
+	if (!isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK) || isStartupBenchmarkModeSupported(mode)) return undefined;
+	return `Error: PI_STARTUP_BENCHMARK is not supported in ${mode} mode`;
+}
+
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
@@ -777,6 +786,8 @@ export async function main(args: string[], options?: MainOptions) {
 					}
 				: undefined,
 			resourceLoaderOptions: {
+				mode: appMode,
+				deferStartupBenchmarkFinalization: true,
 				additionalExtensionPaths: resolvedExtensionPaths,
 				additionalSkillPaths: resolvedSkillPaths,
 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
@@ -929,9 +940,9 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
-	if (startupBenchmark && appMode !== "interactive") {
-		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
+	const startupBenchmarkModeError = getStartupBenchmarkModeError(appMode);
+	if (startupBenchmarkModeError) {
+		console.error(chalk.red(startupBenchmarkModeError));
 		process.exit(1);
 	}
 
@@ -961,7 +972,7 @@ export async function main(args: string[], options?: MainOptions) {
 			tuiMode: parsed.tuiMode,
 			initialThemeSetting: parsed.useTheme,
 		});
-		if (startupBenchmark) {
+		if (isTruthyEnvFlag(process.env.PI_TIMING)) {
 			await interactiveMode.init();
 			time("interactiveMode.init");
 			// Give the TUI's stdin handler a brief chance to consume terminal query replies

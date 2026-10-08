@@ -38,6 +38,7 @@ import {
 	isSyntheticPath,
 	type SourceInfo,
 } from "./source-info.ts";
+import { finishStartupBenchmarkRun, startStartupBenchmarkRun } from "./startup-benchmark.ts";
 import { resetTimings } from "./timings.ts";
 
 export interface ResourceExtensionPaths {
@@ -271,6 +272,8 @@ export function loadProjectContextFiles(options: {
 
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
+	mode?: string;
+	deferStartupBenchmarkFinalization?: boolean;
 	agentDir: string;
 	settingsManager?: SettingsManager;
 	eventBus?: EventBus;
@@ -367,9 +370,14 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private lastPromptPaths: string[];
 	private lastThemePaths: string[];
 	private loaded: boolean;
+	private loadAttempted: boolean;
+	private mode: string;
+	private deferStartupBenchmarkFinalization: boolean;
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
+		this.mode = options.mode ?? "unknown";
+		this.deferStartupBenchmarkFinalization = options.deferStartupBenchmarkFinalization ?? false;
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
@@ -420,6 +428,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.lastPromptPaths = [];
 		this.lastThemePaths = [];
 		this.loaded = false;
+		this.loadAttempted = false;
 	}
 
 	getExtensions(): LoadExtensionsResult {
@@ -507,6 +516,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
+		const trigger = this.loadAttempted ? "reload" : "startup";
+		this.loadAttempted = true;
+		startStartupBenchmarkRun(trigger, this.mode);
+		try {
 		resetTimings("extensions");
 
 		if (this.loaded) {
@@ -671,6 +684,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 			.filter((source) => existsSync(source))
 			.map((source) => resolvePath(source));
 		this.loaded = true;
+		} finally {
+			if (!this.deferStartupBenchmarkFinalization) finishStartupBenchmarkRun();
+		}
 	}
 
 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {

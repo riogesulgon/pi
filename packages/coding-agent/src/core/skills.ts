@@ -1,11 +1,12 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import ignore from "ignore";
-import { basename, dirname, join, relative, resolve, sep } from "path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import { measureStartupResourceSync } from "./startup-benchmark.ts";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -275,6 +276,38 @@ function loadSkillsFromDirInternal(
 }
 
 function loadSkillFromFile(
+	filePath: string,
+	source: string,
+): { skill: Skill | null; diagnostics: ResourceDiagnostic[] } {
+	const fallbackName =
+		basename(filePath) === "SKILL.md" ? basename(dirname(filePath)) : basename(filePath, extname(filePath));
+	const measurement = {
+		kind: "skill" as const,
+		phase: "parse" as const,
+		path: filePath,
+		name: fallbackName,
+	};
+	let result: { skill: Skill | null; diagnostics: ResourceDiagnostic[] } | undefined;
+	try {
+		return measureStartupResourceSync(measurement, () => {
+			const loaded = loadSkillFromFileUnmeasured(filePath, source);
+			result = loaded;
+			if (loaded.skill) measurement.name = loaded.skill.name;
+			// A rejected load (read/parse/validation with no skill) is an error. A
+			// loaded skill may still have warning-only metadata diagnostics.
+			if (!loaded.skill && loaded.diagnostics.length > 0) {
+				throw new Error(loaded.diagnostics[0].message);
+			}
+			return loaded;
+		});
+	} catch (error) {
+		if (result) return result;
+		// Instrumentation must not replace an unexpected loader failure.
+		throw error;
+	}
+}
+
+function loadSkillFromFileUnmeasured(
 	filePath: string,
 	source: string,
 ): { skill: Skill | null; diagnostics: ResourceDiagnostic[] } {
