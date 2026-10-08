@@ -6,13 +6,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/earendil-works/pi.git",
+    "url": "https://github.com/riogesulgon/pi.git",
     "directory": "packages/startup-benchmark"
   },
   "bugs": {
-    "url": "https://github.com/earendil-works/pi/issues"
+    "url": "https://github.com/riogesulgon/pi/issues"
   },
-  "homepage": "https://github.com/earendil-works/pi/tree/main/packages/startup-benchmark",
+  "homepage": "https://github.com/riogesulgon/pi/tree/main/packages/startup-benchmark",
   "keywords": [
     "pi",
     "pi-coding-agent",
